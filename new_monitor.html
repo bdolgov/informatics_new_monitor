@@ -1,0 +1,128 @@
+<html>
+<head>
+  <meta http-equiv="Content-type" content="text/html; charset=utf-8" />
+  <title>New monitor</title>
+  <style>
+    table.monitor {
+      font-family: Verdana;
+      font-size: 10pt;
+      word-wrap: normal;
+      white-space: nowrap;
+      border-collapse: collapse;
+    }
+
+    table.monitor td, table.monitor th {
+      border: 1px solid #CCCCCC;
+    }
+
+    td.r {
+      width: 25px;
+      text-align: center;
+    }
+
+    td.s {
+      width: 50px;
+      text-align: center;
+    }
+
+    .r_ok {
+      background-color: #e1f2e1;
+    }
+
+    .r_am {
+      color: #aaaaaa;
+    }
+
+    .r_run {
+      color: yellow;
+    }
+
+    table.problems {
+      font-family: Verdana;
+      font-size: 10pt;
+      word-wrap: normal;
+      border-collapse: collapse;
+    }
+
+    table.problems td {
+      border: 1px solid #CCCCCC;
+    }
+  </style>
+</head>
+<body>
+  <script src="/ejs.min.js"></script>
+  <div id="content">Loading...</div>
+  <script type="text/javascript">
+    var template = `
+      <table class="monitor">
+        <thead>
+          <tr>
+            <th rowspan="2">№</td>
+            <th rowspan="2">Имя</td>
+            <th rowspan="2">Σ</td>
+            <% contests.forEach(function(contest) { %>
+              <th style="word-wrap: break-word; white-space: normal" colspan="<%= contest.problems.length %>"><%= contest.name %></th>
+            <% }) %>
+          </tr>
+          <tr>
+            <% contests.forEach(function(contest) { %>
+              <% contest.problems.forEach(function(problem) { %>
+                <th><%= problem.letter %></th>
+              <% }) %>
+            <% }) %>
+          </tr>
+        </thead>
+        <tbody>
+          <% users.forEach(function(user) { %>
+            <tr>
+              <td><%= user.seq_number %></td>
+              <td><%= user.name %></td>
+              <td class="s"><%= request.partial_scores ? user.score : user.solved %></td>
+              <% user.results.forEach(function(r) { %>
+                <td class="r <%= r.already_mentioned ? "r_am" : (r.ok ? "r_ok" : (r.running ? "r_run" : "")) %>">
+                  <% if (request.partial_scores) { %>
+                    <%= (r.ok || r.tries > 0) ? r.score : "" %>
+                  <% } else { %>
+                    <%= (r.ok ? "+" : (r.tries > 0 ? "-" : "")) + (r.tries > 0 ? r.tries : "") %>
+                  <% } %>
+                </td>
+              <% }) %>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+      <table class="problems">
+        <% contests.forEach(function(contest) { %>
+          <tr><td colspan="2"><b><%= contest.name %></b></td></tr>
+          <% contest.problems.forEach(function(problem) { %>
+            <tr>
+              <td><%= problem.letter %></td>
+              <td><%= problem.name %></td>
+            </tr>
+          <% }) %>
+        <% }) %>
+      </table>
+    `;
+
+    var xmlhttp = new XMLHttpRequest();
+    var s = window.location.search;
+    if (s == "") {
+      s = "contest_id=26173&contest_id=26174&contest_id=26175&group_id=7141&partial_scores=on&sort_by=score&use_best=on";
+    } else {
+      s = s.substr(1);
+    }
+    var url = "/cgi/new_monitor_beta?output=json&" + s;
+    xmlhttp.onreadystatechange = function() {
+      if (this.readyState == 4 && this.status == 200) {
+        var monitor = JSON.parse(this.responseText);
+        var html = ejs.render(template, monitor)
+        document.getElementById("content").innerHTML = html;
+      } else {
+        //alert("Errror");
+      }
+    };
+    xmlhttp.open("GET", url, true);
+    xmlhttp.send();
+  </script>
+</body>
+</html>
