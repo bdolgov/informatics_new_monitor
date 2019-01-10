@@ -1,14 +1,14 @@
+#include <mysql++/mysql++.h>
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
-#include <mysql++/mysql++.h>
 #include <sstream>
 #include <string>
 #include <tuple>
-#include <vector>
-#include <fstream>
 #include <unordered_map>
+#include <vector>
 
 #include "json11/json11.hpp"
 
@@ -33,16 +33,8 @@ struct Request {
   TimeLimit time_limit;
   std::unordered_map<int, TimeLimit> per_contest_time_limit;
 
-  enum {
-    AUTO,
-    SOLVED,
-    SCORE,
-    NAME
-  } sort_by = AUTO;
-  enum {
-    HTML,
-    JSON
-  } output = HTML;
+  enum { AUTO, SOLVED, SCORE, NAME } sort_by = AUTO;
+  enum { HTML, JSON } output = HTML;
   bool no_python = false;
 };
 
@@ -113,6 +105,8 @@ Request::Request(const string &query_string) {
       per_contest_time_limit[contest_id].start_time = std::stoi(value);
     } else if (GetContestId(name, "end_time_", &contest_id)) {
       per_contest_time_limit[contest_id].end_time = std::stoi(value);
+    } else {
+      throw std::runtime_error("Unknown parameter: " + name + "=" + value);
     }
   }
 
@@ -146,6 +140,7 @@ struct Problem {
 };
 
 struct Contest {
+  int id = -1;
   string name;
   std::vector<Problem> problems;
 };
@@ -164,17 +159,20 @@ string MakeProblemLetter(unsigned idx) {
 
 Contest LoadContest(int id) {
   Contest contest;
+  contest.id = id;
 
   int instance_id = -1;
 
   {
     auto contest_info =
-        moodle_db->query(
-                       "SELECT mdl_statements.id, mdl_statements.name "
-                       "FROM mdl_course_modules JOIN mdl_statements ON "
-                       "mdl_course_modules.instance = mdl_statements.id "
-                       "WHERE mdl_course_modules.id = " +
-                       std::to_string(id)).store();
+        moodle_db
+            ->query(
+                "SELECT mdl_statements.id, mdl_statements.name "
+                "FROM mdl_course_modules JOIN mdl_statements ON "
+                "mdl_course_modules.instance = mdl_statements.id "
+                "WHERE mdl_course_modules.id = " +
+                std::to_string(id))
+            .store();
     if (!contest_info || contest_info.num_rows() != 1) {
       throw std::logic_error("Contest " + std::to_string(id) + " not found");
     }
@@ -183,29 +181,30 @@ Contest LoadContest(int id) {
   }
 
   {
-    moodle_db->query(
-                   "SELECT mdl_problems.id, mdl_problems.name, "
-                   "mdl_ejudge_problem.ejudge_contest_id, "
-                   "mdl_ejudge_problem.problem_id "
-                   "FROM mdl_problems "
-                   "JOIN mdl_statements_problems_correlation ON "
-                   "mdl_statements_problems_correlation.problem_id = "
-                   "mdl_problems.id "
-                   "JOIN mdl_ejudge_problem ON mdl_ejudge_problem.id = "
-                   "mdl_problems.pr_id "
-                   "WHERE mdl_statements_problems_correlation.statement_id = " +
-                   std::to_string(instance_id) +
-                   " "
-                   "ORDER BY rank ASC")
+    moodle_db
+        ->query(
+            "SELECT mdl_problems.id, mdl_problems.name, "
+            "mdl_ejudge_problem.ejudge_contest_id, "
+            "mdl_ejudge_problem.problem_id "
+            "FROM mdl_problems "
+            "JOIN mdl_statements_problems_correlation ON "
+            "mdl_statements_problems_correlation.problem_id = "
+            "mdl_problems.id "
+            "JOIN mdl_ejudge_problem ON mdl_ejudge_problem.id = "
+            "mdl_problems.pr_id "
+            "WHERE mdl_statements_problems_correlation.statement_id = " +
+            std::to_string(instance_id) +
+            " "
+            "ORDER BY rank ASC")
         .for_each([&contest](const mysqlpp::Row &row) {
-           Problem p;
-           p.moodle_id = row[0];
-           p.name = string(row[1]);
-           p.ejudge_id.contest_id = row[2];
-           p.ejudge_id.prob_id = row[3];
-           p.letter = MakeProblemLetter(contest.problems.size());
-           contest.problems.emplace_back(std::move(p));
-         });
+          Problem p;
+          p.moodle_id = row[0];
+          p.name = string(row[1]);
+          p.ejudge_id.contest_id = row[2];
+          p.ejudge_id.prob_id = row[3];
+          p.letter = MakeProblemLetter(contest.problems.size());
+          contest.problems.emplace_back(std::move(p));
+        });
 
     if (contest.problems.size() == 0) {
       throw std::logic_error("No problems in the contest");
@@ -224,7 +223,7 @@ struct Run {
   int id() const { return id_; }
   int score() const { return score_; }
 
-  bool IsOk() const { return status_ == 0; }
+  bool IsOk() const { return status_ == 0 || status_ == 8; }
 
   bool IsWrong() const {
     static std::set<int> wrong_statuses{2, 3, 4, 5, 6, 7};
@@ -342,8 +341,9 @@ ProblemResult CalculateBestProblemResult(
 
 ProblemResult CalculateProblemResult(std::vector<ej::Run> runs, bool use_best) {
   std::sort(runs.begin(), runs.end(),
-            [](const ej::Run &lhs,
-               const ej::Run &rhs) { return lhs.id() < rhs.id(); });
+            [](const ej::Run &lhs, const ej::Run &rhs) {
+              return lhs.id() < rhs.id();
+            });
   return (use_best ? CalculateBestProblemResult
                    : CalculateLastProblemResult)(runs);
 }
@@ -354,24 +354,33 @@ struct User {
 
   int solved = 0, score = 0;
   int seq_number = 0;
+  int moodle_id;
 };
 
 void AddOneUser(const mysqlpp::Row &row, std::map<int, User> *users) {
+  if (row[0].is_null()) {
+    std::cerr << "No mdl_user.ej_id for '" << string(row[1]) << "'"
+              << std::endl;
+    return;
+  }
   User u;
   u.name = string(row[1]);
+  u.moodle_id = int(row[2]);
   users->emplace(int(row[0]), u);
 }
 
 void AddUsersFromGroup(int group_id, std::map<int, User> *users) {
-  moodle_db->query(
-                 "SELECT "
-                 "mdl_user.ej_id, "
-                 "CONCAT(mdl_user.lastname, ' ', mdl_user.firstname) "
-                 "FROM mdl_user "
-                 "JOIN mdl_ejudge_group_users ON "
-                 "mdl_ejudge_group_users.user_id=mdl_user.id "
-                 "WHERE mdl_ejudge_group_users.group_id = " +
-                 std::to_string(group_id))
+  moodle_db
+      ->query(
+          "SELECT "
+          "mdl_user.ej_id, "                                     /* 0 */
+          "CONCAT(mdl_user.lastname, ' ', mdl_user.firstname), " /* 1 */
+          "mdl_user.id "                                         /* 2 */
+          "FROM mdl_user "
+          "JOIN mdl_ejudge_group_users ON "
+          "mdl_ejudge_group_users.user_id=mdl_user.id "
+          "WHERE mdl_ejudge_group_users.group_id = " +
+          std::to_string(group_id))
       .for_each([users](const mysqlpp::Row &row) { AddOneUser(row, users); });
 }
 
@@ -403,13 +412,13 @@ Monitor GetMonitor(const Request &r) {
       problem.letter =
           std::to_string(contest_id_seq) + /*"-" +*/ problem.letter;
       problem.global_index = global_index_seq++;
-      ej_problem_to_global_index[problem.ejudge_id]
-          .push_back(problem.global_index);
+      ej_problem_to_global_index[problem.ejudge_id].push_back(
+          problem.global_index);
 
-      problems_filter.append(" OR (contest_id = " +
-                             std::to_string(problem.ejudge_id.contest_id) +
-                             ") AND (prob_id = " +
-                             std::to_string(problem.ejudge_id.prob_id) + ")");
+      problems_filter.append(
+          " OR (contest_id = " + std::to_string(problem.ejudge_id.contest_id) +
+          ") AND (prob_id = " + std::to_string(problem.ejudge_id.prob_id) +
+          ")");
     }
     ++contest_id_seq;
   }
@@ -441,37 +450,37 @@ Monitor GetMonitor(const Request &r) {
   string ej_query =
       "SELECT "
       "run_id, contest_id, prob_id, user_id, status, score, lang_id, "
-      "create_time "
+      "UNIX_TIMESTAMP(create_time) "
       "FROM runs "
       "WHERE " +
       problems_filter + " AND " + users_filter + " AND " + time_filter;
   std::cerr << "ej query: " << ej_query << std::endl;
 
-  ejudge_db->query(ej_query)
-      .for_each([&runs_by_user_and_problem, &r](const mysqlpp::Row &row) {
-         int run_id = row[0];
-         int contest_id = row[1];
-         int prob_id = row[2];
-         int user_id = row[3];
-         int status = row[4];
-         int score = row[5];
-         int lang_id = row[6];
-         time_t create_time = row[7];
+  ejudge_db->query(ej_query).for_each([&runs_by_user_and_problem,
+                                       &r](const mysqlpp::Row &row) {
+    int run_id = row[0];
+    int contest_id = row[1];
+    int prob_id = row[2];
+    int user_id = row[3];
+    int status = row[4];
+    int score = row[5];
+    int lang_id = row[6];
+    time_t create_time = row[7];
 
-         bool python_allowed =
-             !r.no_python ||
-             ej::GetContestPythonLangIds(contest_id).count(lang_id) == 0;
+    bool python_allowed =
+        !r.no_python ||
+        ej::GetContestPythonLangIds(contest_id).count(lang_id) == 0;
 
-         auto time_limit = r.per_contest_time_limit.find(contest_id);
-         bool time_allowed = time_limit == r.per_contest_time_limit.end() ||
-                             (time_limit->second.start_time <= create_time &&
-                              create_time <= time_limit->second.end_time);
+    auto time_limit = r.per_contest_time_limit.find(contest_id);
+    bool time_allowed = time_limit == r.per_contest_time_limit.end() ||
+                        (time_limit->second.start_time <= create_time &&
+                         create_time <= time_limit->second.end_time);
 
-         if (python_allowed && time_allowed) {
-           runs_by_user_and_problem[{user_id, {contest_id, prob_id}}]
-               .emplace_back(run_id, status, score);
-         }
-       });
+    if (python_allowed && time_allowed) {
+      runs_by_user_and_problem[{user_id, {contest_id, prob_id}}].emplace_back(
+          run_id, status, score);
+    }
+  });
 
   for (const auto &runs : runs_by_user_and_problem) {
     auto results = CalculateProblemResult(runs.second, r.use_best);
@@ -606,9 +615,11 @@ void RenderHtml(const Request &r, const Monitor &monitor) {
   for (const auto &contest : contests) {
     std::cout << "<tr><td>"
               << "Contest"
-              << "</td><td>" << contest.name << "</td></tr>";
+              << "</td><td>" << contest.name << " [" << contest.id << "]"
+              << "</td></tr>";
     for (const auto &problem : contest.problems) {
       std::cout << "<tr><td>" << problem.letter << "</td><td>" << problem.name
+                << " [" << problem.moodle_id << "]"
                 << "</td></tr>";
     }
   }
@@ -620,19 +631,27 @@ void RenderJson(const Request &r, const Monitor &m) {
 
   Json::object root;
 
-  root["request"] = Json::object(
-      {{"partial_scores", r.partial_scores}, {"use_best", r.use_best}, });
+  root["request"] = Json::object({
+      {"partial_scores", r.partial_scores},
+      {"use_best", r.use_best},
+  });
 
   Json::array contests;
   for (const auto &contest : m.contests) {
     Json::array problems;
     for (const auto &problem : contest.problems) {
-      problems.push_back(Json::object{{"global_index", problem.global_index},
-                                      {"letter", problem.letter},
-                                      {"name", problem.name}, });
+      problems.push_back(Json::object{
+          {"global_index", problem.global_index},
+          {"letter", problem.letter},
+          {"name", problem.name},
+          {"moodle_id", problem.moodle_id},
+      });
     }
-    contests.push_back(
-        Json::object{{"name", contest.name}, {"problems", problems}, });
+    contests.push_back(Json::object{
+        {"name", contest.name},
+        {"problems", problems},
+        {"id", contest.id},
+    });
   }
   root["contests"] = std::move(contests);
 
@@ -640,22 +659,27 @@ void RenderJson(const Request &r, const Monitor &m) {
   for (const auto &user : m.users) {
     Json::array results;
     for (const auto &result : user.results) {
-      results.push_back(Json::object{{"already_mentioned",
-                                      result.already_mentioned},
-                                     {"has_running", result.has_running},
-                                     {"ok", result.ok}, {"score", result.score},
-                                     {"tries", result.tries}, });
+      results.push_back(Json::object{
+          {"already_mentioned", result.already_mentioned},
+          {"has_running", result.has_running},
+          {"ok", result.ok},
+          {"score", result.score},
+          {"tries", result.tries},
+      });
     }
-    users.push_back(Json::object{{"name", user.name},
-                                 {"results", results},
-                                 {"score", user.score},
-                                 {"seq_number", user.seq_number},
-                                 {"solved", user.solved}, });
+    users.push_back(Json::object{
+        {"name", user.name},
+        {"results", results},
+        {"score", user.score},
+        {"seq_number", user.seq_number},
+        {"solved", user.solved},
+        {"moodle_id", user.moodle_id},
+    });
   }
   root["users"] = users;
 
-  std::cout << "Content-type: application/json\r\n\r\n" << Json(root).dump()
-            << std::endl;
+  std::cout << "Content-type: application/json\r\n\r\n"
+            << Json(root).dump() << std::endl;
 }
 
 int main(int ac, char **av) {
@@ -689,8 +713,7 @@ int main(int ac, char **av) {
     } else if (r.output == r.HTML) {
       RenderHtml(r, monitor);
     }
-  }
-  catch (std::exception &e) {
+  } catch (std::exception &e) {
     // TODO: check g_json_output
     std::cout << "Content-type: text/plain; charset=utf8\r\n\r\nError:\n"
               << e.what() << std::endl;

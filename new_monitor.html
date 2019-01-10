@@ -47,6 +47,16 @@
     table.problems td {
       border: 1px solid #CCCCCC;
     }
+
+  a.userlink {
+      color: black;
+    text-decoration: none;
+  }
+
+  a.userlink:hover {
+      color: black;
+    text-decoration: underline;
+  }
   </style>
 </head>
 <body>
@@ -61,13 +71,15 @@
             <th rowspan="2">Имя</td>
             <th rowspan="2">Σ</td>
             <% contests.forEach(function(contest) { %>
-              <th style="word-wrap: break-word; white-space: normal" colspan="<%= contest.problems.length %>"><%= contest.name %></th>
+              <th style="word-wrap: break-word; white-space: normal" colspan="<%= contest.problems.length %>">
+          <a href="/mod/statements/view.php?id=<%= contest.id %>"><%= contest.name %></a>
+        </th>
             <% }) %>
           </tr>
           <tr>
             <% contests.forEach(function(contest) { %>
               <% contest.problems.forEach(function(problem) { %>
-                <th><%= problem.letter %></th>
+                <th><a href="/mod/statements/view3.php?chapterid=<%= problem.moodle_id %>"><%= problem.letter %></a></th>
               <% }) %>
             <% }) %>
           </tr>
@@ -76,7 +88,7 @@
           <% users.forEach(function(user) { %>
             <tr>
               <td><%= user.seq_number %></td>
-              <td><%= user.name %></td>
+              <td><a class="userlink" href="/moodle/user/view.php?id=<%= user.moodle_id %>"><%= user.name %></a></td>
               <td class="s"><%= request.partial_scores ? user.score : user.solved %></td>
               <% user.results.forEach(function(r) { %>
                 <td class="r <%= r.already_mentioned ? "r_am" : (r.ok ? "r_ok" : (r.running ? "r_run" : "")) %>">
@@ -93,11 +105,17 @@
       </table>
       <table class="problems">
         <% contests.forEach(function(contest) { %>
-          <tr><td colspan="2"><b><%= contest.name %></b></td></tr>
+          <tr><td colspan="2">
+            <b><%= contest.name %></b>
+            [<%= contest.id %>, <a href="/mod/statements/view.php?id=<%= contest.id %>">открыть</a>]
+          </td></tr>
           <% contest.problems.forEach(function(problem) { %>
             <tr>
               <td><%= problem.letter %></td>
-              <td><%= problem.name %></td>
+              <td>
+                <%= problem.name %>
+                [<%= problem.moodle_id %>, <a href="/mod/statements/view3.php?chapterid=<%= problem.moodle_id %>">открыть</a>]
+              </td>
             </tr>
           <% }) %>
         <% }) %>
