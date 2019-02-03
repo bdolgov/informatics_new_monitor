@@ -36,6 +36,7 @@ struct Request {
   enum { AUTO, SOLVED, SCORE, NAME } sort_by = AUTO;
   enum { HTML, JSON } output = HTML;
   bool no_python = false;
+  bool show_login = false;
 };
 
 bool g_json_output = false;
@@ -105,6 +106,8 @@ Request::Request(const string &query_string) {
       per_contest_time_limit[contest_id].start_time = std::stoi(value);
     } else if (GetContestId(name, "end_time_", &contest_id)) {
       per_contest_time_limit[contest_id].end_time = std::stoi(value);
+    } else if (name == "show_login") {
+      show_login = value == "on";
     } else {
       throw std::runtime_error("Unknown parameter: " + name + "=" + value);
     }
@@ -350,6 +353,8 @@ ProblemResult CalculateProblemResult(std::vector<ej::Run> runs, bool use_best) {
 
 struct User {
   string name;
+  string email;
+  string login;
   std::vector<ProblemResult> results;
 
   int solved = 0, score = 0;
@@ -365,6 +370,8 @@ void AddOneUser(const mysqlpp::Row &row, std::map<int, User> *users) {
   }
   User u;
   u.name = string(row[1]);
+  u.email = string(row[4]);
+  u.login = string(row[3]);
   u.moodle_id = int(row[2]);
   users->emplace(int(row[0]), u);
 }
@@ -375,7 +382,8 @@ void AddUsersFromGroup(int group_id, std::map<int, User> *users) {
           "SELECT "
           "mdl_user.ej_id, "                                     /* 0 */
           "CONCAT(mdl_user.lastname, ' ', mdl_user.firstname), " /* 1 */
-          "mdl_user.id "                                         /* 2 */
+          "mdl_user.id, "                                        /* 2 */
+          "mdl_user.username, mdl_user.email "                   /* 3, 4 */
           "FROM mdl_user "
           "JOIN mdl_ejudge_group_users ON "
           "mdl_ejudge_group_users.user_id=mdl_user.id "
@@ -543,6 +551,9 @@ void RenderHtml(const Request &r, const Monitor &monitor) {
   std::vector<std::vector<string>> table;
 
   std::vector<string> header{"N", "Name", "Sum"};
+  if (r.show_login) {
+    header = {"N", "Name", "Login", "Email", "Sum"};
+  }
   for (const auto &contest : contests) {
     for (const auto &problem : contest.problems) {
       header.push_back(
@@ -559,6 +570,10 @@ void RenderHtml(const Request &r, const Monitor &monitor) {
     std::vector<string> row;
     row.emplace_back(std::to_string(user.seq_number));
     row.emplace_back(user.name);
+    if (r.show_login) {
+      row.emplace_back(user.login);
+      row.emplace_back(user.email);
+    }
     row.emplace_back(
         std::to_string(r.partial_scores ? user.score : user.solved));
     for (const auto &problem : user.results) {
